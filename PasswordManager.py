@@ -1,0 +1,101 @@
+from Crypto.Cipher import AES
+from Crypto.Protocol.KDF import PBKDF2
+from Crypto.Random import get_random_bytes
+import json
+import os
+import sys
+
+class PasswordManager:
+    def __init__(self):
+        self.master_passphrase = None
+        self.key = None
+        self.passwords = {}
+
+    def set_master_passphrase(self, master_passphrase):
+        self.master_passphrase = master_passphrase.encode()
+        self.salt = get_random_bytes(AES.block_size)
+        self.key = PBKDF2(self.master_passphrase, self.salt)
+
+    def save_passwords(self):
+        cipher = AES.new(self.key, AES.MODE_GCM)
+        nonce = cipher.nonce
+        ciphertext, tag = cipher.encrypt_and_digest(json.dumps(self.passwords).encode())
+        with open('passwords.enc', 'wb') as file:
+            [file.write(x) for x in (self.salt, nonce, tag, ciphertext)]
+
+    def load_passwords(self):
+        if os.path.exists('passwords.enc'):
+            with open('passwords.enc', 'rb') as file:
+                self.salt = file.read(AES.block_size)
+                nonce = file.read(AES.block_size)
+                tag = file.read(16)
+                ciphertext = file.read()
+                self.key = PBKDF2(self.master_passphrase, self.salt)
+                cipher = AES.new(self.key, AES.MODE_GCM, nonce=nonce)
+                try:
+                    decrypted_data = cipher.decrypt_and_verify(ciphertext, tag)
+                    self.passwords = json.loads(decrypted_data)
+                    return True  # Return True if decryption and verification are successful
+                except (ValueError, KeyError) as e:
+                    print("Master passphrase incorrect or integrity check failed.")
+                    return False  # Return False if decryption or verification fails
+
+    def add_password(self, address, password):
+        self.passwords[address] = password
+        self.save_passwords()
+
+    def get_password(self, address):
+        return self.passwords.get(address, None)
+
+def main():
+    password_manager = PasswordManager()
+
+    while True:
+        master_passphrase = input("Enter master passphrase: ")
+        password_manager.set_master_passphrase(master_passphrase)
+
+        if password_manager.load_passwords():
+            break  # Exit the loop if the passphrase is correct and data is loaded successfully
+
+    while True:
+        print("\n1. Store Password")
+        print("2. Retrieve Password")
+        print("3. Change Passphrase")
+        print("4. Exit")
+
+        choice = input("Enter your choice: ")
+
+        if choice == '1':
+            address = input("Enter address: ")
+            password = input("Enter password: ")
+            password_manager.add_password(address, password)
+            print("Password stored successfully.")
+
+        elif choice == '2':
+            address = input("Enter address to retrieve password: ")
+            password = password_manager.get_password(address)
+            if password:
+                print(f"Password for {address}: {password}")
+            else:
+                print("Password not found.")
+
+        elif choice == '3':
+            current_passphrase = input("Enter current master passphrase: ")
+            if current_passphrase == password_manager.master_passphrase.decode():
+                new_passphrase = input("Enter new master passphrase: ")
+                password_manager.set_master_passphrase(new_passphrase)
+                password_manager.save_passwords()
+                print("Passphrase changed successfully.")
+            else:
+                print("Incorrect current passphrase. Passphrase change failed.")
+
+        elif choice == '4':
+            password_manager.save_passwords()
+            print("Exiting...")
+            break
+
+        else:
+            print("Invalid choice. Please try again.")
+
+if __name__ == "__main__":
+    main()
